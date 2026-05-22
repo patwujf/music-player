@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Music Player</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    user-select: none;
+  }
+
+  .player {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .btn {
+    width: 160px;
+    height: 160px;
+    border-radius: 50%;
+    border: 3px solid var(--btn-border);
+    cursor: pointer;
+    font-size: 56px;
+    background: var(--btn-bg);
+    color: var(--btn-color);
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    outline: none;
+    position: relative;
+  }
+
+  .btn:hover {
+    border-color: var(--btn-hover-border);
+    box-shadow: 0 0 40px var(--btn-hover-glow);
+  }
+
+  .btn:active {
+    transform: scale(0.92);
+  }
+
+  /* ── 播放中状态 ── */
+  .btn.playing {
+    background: #e94560;
+    color: #fff;
+    border-color: #e94560;
+    box-shadow: 0 0 60px rgba(233,69,96,0.3);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 40px rgba(233,69,96,0.25); }
+    50%       { box-shadow: 0 0 80px rgba(233,69,96,0.45); }
+  }
+
+  /* ── 脉冲光晕环 ── */
+  .btn.playing::before {
+    content: '';
+    position: absolute;
+    inset: -8px;
+    border-radius: 50%;
+    border: 2px solid rgba(233,69,96,0.15);
+    animation: ring 2s ease-in-out infinite;
+  }
+
+  @keyframes ring {
+    0%, 100% { transform: scale(1); opacity: 0.5; }
+    50%       { transform: scale(1.08); opacity: 0; }
+  }
+
+  .song-name {
+    color: var(--text-muted);
+    font-size: 14px;
+    max-width: 260px;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-height: 1.2em;
+    transition: color 0.3s;
+  }
+
+  .song-name.active {
+    color: var(--text);
+  }
+
+  .hint {
+    position: fixed;
+    bottom: 24px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    color: var(--hint);
+    font-size: 12px;
+  }
+
+  /* ── 深色模式（默认） ── */
+  :root {
+    --bg: #0f0f1a;
+    --btn-bg: #1a1a30;
+    --btn-color: #e94560;
+    --btn-border: rgba(255,255,255,0.08);
+    --btn-hover-border: rgba(233,69,96,0.3);
+    --btn-hover-glow: rgba(233,69,96,0.15);
+    --text: rgba(255,255,255,0.75);
+    --text-muted: rgba(255,255,255,0.4);
+    --hint: rgba(255,255,255,0.12);
+  }
+
+  /* ── 浅色模式 ── */
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f0eb;
+      --btn-bg: #ddd5cb;
+      --btn-color: #c0394b;
+      --btn-border: rgba(0,0,0,0.08);
+      --btn-hover-border: rgba(192,57,75,0.3);
+      --btn-hover-glow: rgba(192,57,75,0.12);
+      --text: rgba(0,0,0,0.7);
+      --text-muted: rgba(0,0,0,0.35);
+      --hint: rgba(0,0,0,0.12);
+    }
+
+    .btn.playing {
+      background: #e94560;
+      color: #fff;
+      border-color: #e94560;
+      box-shadow: 0 0 60px rgba(233,69,96,0.25);
+    }
+
+    .hint { color: rgba(0,0,0,0.18); }
+  }
+</style>
+</head>
+<body>
+
+<div class="player">
+  <button id="playBtn" class="btn" aria-label="播放/停止">▶</button>
+  <div id="songName" class="song-name"></div>
+</div>
+
+<div class="hint">把 MP3 放到 music/ 目录</div>
+
+<script>
+  const btn = document.getElementById('playBtn');
+  const songName = document.getElementById('songName');
+  let audio = null;
+  let isPlaying = false;
+
+  async function playRandom() {
+    try {
+      const res = await fetch('/api/random-song');
+      const data = await res.json();
+
+      if (!data.url) {
+        songName.textContent = '📂 没有音乐文件';
+        songName.classList.remove('active');
+        return false;
+      }
+
+      audio = new Audio(data.url);
+
+      // 用普通函数而非箭头函数，通过 this === audio 判断当前 audio
+      // 防止旧 Audio 对象的异步事件干扰新播放
+      audio.addEventListener('ended', function onEnded() {
+        if (this === audio) stop();
+      });
+
+      audio.addEventListener('error', function onError() {
+        if (this === audio) {
+          stop();
+          songName.textContent = '⚠️ 播放失败';
+          songName.classList.remove('active');
+        }
+      });
+
+      await audio.play();
+      isPlaying = true;
+      btn.textContent = '⏹';
+      btn.classList.add('playing');
+      songName.textContent = data.name;
+      songName.classList.add('active');
+      return true;
+    } catch (e) {
+      songName.textContent = '⚠️ 加载失败';
+      songName.classList.remove('active');
+      return false;
+    }
+  }
+
+  function stop() {
+    if (audio) {
+      audio.pause();
+      // 注意：不要设置 audio.src = ''，否则浏览器会异步触发 error 事件，
+      // 导致旧 Audio 的 error 回调覆盖新的播放状态
+      audio = null;
+    }
+    isPlaying = false;
+    btn.textContent = '▶';
+    btn.classList.remove('playing');
+    songName.textContent = '';
+    songName.classList.remove('active');
+  }
+
+  btn.addEventListener('click', () => {
+    if (isPlaying) {
+      stop();
+    } else {
+      playRandom();
+    }
+  });
+</script>
+
+</body>
+</html>
