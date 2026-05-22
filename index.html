@@ -56,7 +56,6 @@
     transform: scale(0.92);
   }
 
-  /* ── 播放中状态 ── */
   .btn.playing {
     background: #e94560;
     color: #fff;
@@ -70,7 +69,6 @@
     50%       { box-shadow: 0 0 80px rgba(233,69,96,0.45); }
   }
 
-  /* ── 脉冲光晕环 ── */
   .btn.playing::before {
     content: '';
     position: absolute;
@@ -111,7 +109,6 @@
     font-size: 12px;
   }
 
-  /* ── 深色模式（默认） ── */
   :root {
     --bg: #0f0f1a;
     --btn-bg: #1a1a30;
@@ -124,7 +121,6 @@
     --hint: rgba(255,255,255,0.12);
   }
 
-  /* ── 浅色模式 ── */
   @media (prefers-color-scheme: light) {
     :root {
       --bg: #f5f0eb;
@@ -141,8 +137,6 @@
     .btn.playing {
       background: #e94560;
       color: #fff;
-      border-color: #e94560;
-      box-shadow: 0 0 60px rgba(233,69,96,0.25);
     }
 
     .hint { color: rgba(0,0,0,0.18); }
@@ -156,29 +150,38 @@
   <div id="songName" class="song-name"></div>
 </div>
 
-<div class="hint">把 MP3 放到 music/ 目录</div>
+<div class="hint">想加歌？编辑 songs.json，把 MP3 丢进 music/ 文件夹</div>
 
 <script>
   const btn = document.getElementById('playBtn');
   const songName = document.getElementById('songName');
   let audio = null;
   let isPlaying = false;
+  let songs = [];
+
+  // 加载歌曲列表
+  async function loadSongs() {
+    try {
+      const res = await fetch('songs.json');
+      songs = await res.json();
+    } catch {
+      songs = [];
+    }
+  }
 
   async function playRandom() {
+    if (songs.length === 0) {
+      songName.textContent = '📂 没有音乐文件';
+      songName.classList.remove('active');
+      return false;
+    }
+
+    const name = songs[Math.floor(Math.random() * songs.length)];
+    const url = 'music/' + encodeURIComponent(name);
+
     try {
-      const res = await fetch('/api/random-song');
-      const data = await res.json();
+      audio = new Audio(url);
 
-      if (!data.url) {
-        songName.textContent = '📂 没有音乐文件';
-        songName.classList.remove('active');
-        return false;
-      }
-
-      audio = new Audio(data.url);
-
-      // 用普通函数而非箭头函数，通过 this === audio 判断当前 audio
-      // 防止旧 Audio 对象的异步事件干扰新播放
       audio.addEventListener('ended', function onEnded() {
         if (this === audio) stop();
       });
@@ -195,11 +198,11 @@
       isPlaying = true;
       btn.textContent = '⏹';
       btn.classList.add('playing');
-      songName.textContent = data.name;
+      songName.textContent = name.replace(/\.mp3$/i, '');
       songName.classList.add('active');
       return true;
     } catch (e) {
-      songName.textContent = '⚠️ 加载失败';
+      songName.textContent = '⚠️ 播放失败';
       songName.classList.remove('active');
       return false;
     }
@@ -208,8 +211,6 @@
   function stop() {
     if (audio) {
       audio.pause();
-      // 注意：不要设置 audio.src = ''，否则浏览器会异步触发 error 事件，
-      // 导致旧 Audio 的 error 回调覆盖新的播放状态
       audio = null;
     }
     isPlaying = false;
@@ -226,6 +227,9 @@
       playRandom();
     }
   });
+
+  // 页面加载时预拉取歌单
+  loadSongs();
 </script>
 
 </body>
