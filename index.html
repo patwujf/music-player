@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Music Player</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    user-select: none;
+  }
+
+  .player {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .btn {
+    width: 160px;
+    height: 160px;
+    border-radius: 50%;
+    border: 3px solid var(--btn-border);
+    cursor: pointer;
+    font-size: 56px;
+    background: var(--btn-bg);
+    color: var(--btn-color);
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    outline: none;
+    position: relative;
+  }
+
+  .btn:hover {
+    border-color: var(--btn-hover-border);
+    box-shadow: 0 0 40px var(--btn-hover-glow);
+  }
+
+  .btn:active {
+    transform: scale(0.92);
+  }
+
+  .btn.playing {
+    background: #3498db;
+    color: #fff;
+    border-color: #3498db;
+    box-shadow: 0 0 60px rgba(52,152,219,0.3);
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 40px rgba(52,152,219,0.25); }
+    50%       { box-shadow: 0 0 80px rgba(52,152,219,0.45); }
+  }
+
+  .btn.playing::before {
+    content: '';
+    position: absolute;
+    inset: -8px;
+    border-radius: 50%;
+    border: 2px solid rgba(52,152,219,0.15);
+    animation: ring 2s ease-in-out infinite;
+  }
+
+  @keyframes ring {
+    0%, 100% { transform: scale(1); opacity: 0.5; }
+    50%       { transform: scale(1.08); opacity: 0; }
+  }
+
+  .song-name {
+    color: var(--text-muted);
+    font-size: 14px;
+    max-width: 260px;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-height: 1.2em;
+    transition: color 0.3s;
+  }
+
+  .song-name.active {
+    color: var(--text);
+  }
+
+  .song-name.next {
+    color: var(--text-muted);
+    font-size: 12px;
+    opacity: 0.6;
+  }
+
+  .hint {
+    position: fixed;
+    bottom: 24px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    color: var(--hint);
+    font-size: 12px;
+  }
+
+  .crossfade-info {
+    font-size: 11px;
+    color: var(--hint);
+    min-height: 1em;
+    transition: opacity 0.3s;
+  }
+
+  :root {
+    --bg: #0f0f1a;
+    --btn-bg: #1a1a30;
+    --btn-color: #3498db;
+    --btn-border: rgba(255,255,255,0.08);
+    --btn-hover-border: rgba(52,152,219,0.3);
+    --btn-hover-glow: rgba(52,152,219,0.15);
+    --text: rgba(255,255,255,0.75);
+    --text-muted: rgba(255,255,255,0.4);
+    --hint: rgba(255,255,255,0.12);
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f0eb;
+      --btn-bg: #ddd5cb;
+      --btn-color: #2980b9;
+      --btn-border: rgba(0,0,0,0.08);
+      --btn-hover-border: rgba(41,128,185,0.3);
+      --btn-hover-glow: rgba(41,128,185,0.12);
+      --text: rgba(0,0,0,0.7);
+      --text-muted: rgba(0,0,0,0.35);
+      --hint: rgba(0,0,0,0.12);
+    }
+
+    .btn.playing {
+      background: #3498db;
+      color: #fff;
+    }
+
+    .hint { color: rgba(0,0,0,0.18); }
+  }
+</style>
+</head>
+<body>
+
+<div class="player">
+  <button id="playBtn" class="btn" aria-label="播放/停止">▶</button>
+  <div id="songName" class="song-name"></div>
+  <div id="nextSongName" class="song-name next"></div>
+  <div id="crossfadeInfo" class="crossfade-info"></div>
+</div>
+
+<div class="hint">想加歌？编辑 songs.json，把 MP3 丢进 music/ 文件夹</div>
+
+<script>
+  const btn = document.getElementById('playBtn');
+  const songName = document.getElementById('songName');
+  const nextSongName = document.getElementById('nextSongName');
+  const crossfadeInfo = document.getElementById('crossfadeInfo');
+
+  let currentAudio = null;
+  let nextAudio = null;
+  let isPlaying = false;
+  let isCrossfading = false;
+  let songs = [];
+  let fadeTimer = null;
+
+  const CROSSFADE_DURATION = 7; // 渐出渐入时长（秒）
+  const FADE_START_BEFORE_END = 8; // 结束前多少秒开始渐出
+
+  // 加载歌曲列表
+  async function loadSongs() {
+    try {
+      const res = await fetch('songs.json');
+      songs = await res.json();
+    } catch {
+      songs = [];
+    }
+  }
+
+  // 修改音量
+  function setVolume(audio, vol) {
+    if (audio && !audio._fadingOut) {
+      try { audio.volume = Math.max(0, Math.min(1, vol)); } catch {}
+    }
+  }
+
+  // 随机选一首与当前不同的歌
+  function pickNext(currentName) {
+    if (songs.length === 0) return null;
+    if (songs.length === 1) return songs[0];
+    let next;
+    do {
+      next = songs[Math.floor(Math.random() * songs.length)];
+    } while (next === currentName && songs.length > 1);
+    return next;
+  }
+
+  // 播放一首歌（初始音量 0，然后渐入）
+  function createAudio(url, initialVolume) {
+    const a = new Audio(url);
+    a.volume = initialVolume;
+    return a;
+  }
+
+  // 开始播放歌曲
+  async function playSong(name, startVolume) {
+    const url = 'music/' + encodeURIComponent(name);
+    const a = createAudio(url, startVolume);
+
+    try {
+      await a.play();
+      return a;
+    } catch (e) {
+      console.warn('播放失败:', name, e);
+      return null;
+    }
+  }
+
+  // 开始整体播放流程
+  async function startPlaying() {
+    if (songs.length === 0) {
+      songName.textContent = '📂 没有音乐文件';
+      songName.classList.remove('active');
+      return;
+    }
+
+    const name = pickNext(null);
+    await playCurrent(name);
+  }
+
+  // 播放当前歌 + 监听快结束时触发渐变
+  async function playCurrent(name) {
+    if (!name) return stop();
+
+    const a = await playSong(name, 1.0);
+    if (!a) return stop();
+
+    currentAudio = a;
+    currentAudio._name = name;
+    isPlaying = true;
+    isCrossfading = false;
+
+    btn.textContent = '⏹';
+    btn.classList.add('playing');
+    songName.textContent = name.replace(/\.mp3$/i, '');
+    songName.classList.add('active');
+    nextSongName.textContent = '';
+    crossfadeInfo.textContent = '';
+
+    // 监听时间，在快结束时启动交叉渐入渐出
+    currentAudio.addEventListener('timeupdate', function onTime() {
+      if (this !== currentAudio) return;
+      if (isCrossfading) return;
+      if (!currentAudio || !currentAudio.duration) return;
+
+      const remaining = currentAudio.duration - currentAudio.currentTime;
+      if (remaining <= FADE_START_BEFORE_END && remaining > 0) {
+        startCrossfade();
+      }
+    });
+
+    // 如果歌曲自然结束（渐变未触发时兜底）
+    currentAudio.addEventListener('ended', function onEnd() {
+      if (this === currentAudio) {
+        if (!isCrossfading) startCrossfade();
+      }
+    });
+  }
+
+  // 执行交叉渐出渐入
+  function startCrossfade() {
+    if (!currentAudio || isCrossfading) return;
+    if (songs.length === 0) { stop(); return; }
+
+    isCrossfading = true;
+    const currentName = currentAudio._name;
+    const nextName = pickNext(currentName);
+
+    if (!nextName) { stop(); return; }
+
+    nextSongName.textContent = '即将播放: ' + nextName.replace(/\.mp3$/i, '');
+    crossfadeInfo.textContent = '🎵 交替中...';
+
+    // 从 0 音量开始播下一首
+    playSong(nextName, 0).then(a => {
+      if (!a) return;
+      nextAudio = a;
+      nextAudio._name = nextName;
+
+      const startTime = performance.now();
+      const duration = CROSSFADE_DURATION * 1000; // ms
+
+      fadeTimer = requestAnimationFrame(function fade(timestamp) {
+        const elapsed = timestamp - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+
+        // 渐出：当前歌音量从 1 → 0
+        if (currentAudio) {
+          currentAudio.volume = Math.max(0, 1 - progress);
+        }
+        // 渐入：下一首歌音量从 0 → 1
+        if (nextAudio) {
+          nextAudio.volume = Math.min(1, progress);
+        }
+
+        crossfadeInfo.textContent = `🎵 交替 ${Math.round(progress * 100)}%`;
+
+        if (progress < 1) {
+          fadeTimer = requestAnimationFrame(fade);
+        } else {
+          // 渐变完成：停止当前歌，切换为下一首
+          finishCrossfade();
+        }
+      });
+    });
+  }
+
+  function finishCrossfade() {
+    // 清理旧音频
+    if (currentAudio) {
+      try { currentAudio.pause(); } catch {}
+      currentAudio = null;
+    }
+
+    // 下一首成为当前歌
+    if (nextAudio) {
+      currentAudio = nextAudio;
+      currentAudio.volume = 1.0;
+      nextAudio = null;
+
+      const name = currentAudio._name;
+      songName.textContent = name.replace(/\.mp3$/i, '');
+      nextSongName.textContent = '';
+      crossfadeInfo.textContent = '';
+      isCrossfading = false;
+
+      // 监听这首新歌，准备下一次渐变
+      currentAudio.addEventListener('timeupdate', function onTime() {
+        if (this !== currentAudio) return;
+        if (isCrossfading) return;
+        if (!currentAudio || !currentAudio.duration) return;
+
+        const remaining = currentAudio.duration - currentAudio.currentTime;
+        if (remaining <= FADE_START_BEFORE_END && remaining > 0) {
+          startCrossfade();
+        }
+      });
+
+      currentAudio.addEventListener('ended', function onEnd() {
+        if (this === currentAudio) {
+          if (!isCrossfading) startCrossfade();
+        }
+      });
+    } else {
+      // 没有下一首
+      stop();
+    }
+  }
+
+  function stop() {
+    if (fadeTimer) {
+      cancelAnimationFrame(fadeTimer);
+      fadeTimer = null;
+    }
+
+    if (currentAudio) {
+      try { currentAudio.pause(); } catch {}
+      currentAudio = null;
+    }
+    if (nextAudio) {
+      try { nextAudio.pause(); } catch {}
+      nextAudio = null;
+    }
+
+    isPlaying = false;
+    isCrossfading = false;
+    btn.textContent = '▶';
+    btn.classList.remove('playing');
+    songName.textContent = '';
+    songName.classList.remove('active');
+    nextSongName.textContent = '';
+    crossfadeInfo.textContent = '';
+  }
+
+  btn.addEventListener('click', () => {
+    if (isPlaying) {
+      stop();
+    } else {
+      startPlaying();
+    }
+  });
+
+  // 页面加载时预拉取歌单
+  loadSongs();
+</script>
+
+</body>
+</html>
