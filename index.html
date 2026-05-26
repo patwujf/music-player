@@ -179,6 +179,7 @@
   let isCrossfading = false;
   let songs = [];
   let fadeTimer = null;
+  let preloadedAudio = null; // { audio: Audio, name: string, ready: boolean }
 
   const CROSSFADE_DURATION = 7; // 渐出渐入时长（秒）
   const FADE_START_BEFORE_END = 8; // 结束前多少秒开始渐出
@@ -285,6 +286,42 @@
     crossfadeInfo.textContent = '';
   }
 
+  // 预加载下一首音频数据（只加载不播放）
+  // 选定一首后存到 preloadedName，playNext 优先用它
+  let preloadedName = null;
+
+  function preloadNext(currentName) {
+    // 清理旧预加载
+    if (preloadedAudio) {
+      try { preloadedAudio.audio.pause(); } catch {}
+      preloadedAudio = null;
+    }
+    preloadedName = null;
+    if (songs.length <= 1) return;
+
+    const nextName = pickNext(currentName);
+    if (!nextName) return;
+
+    preloadedName = nextName;
+
+    const url = 'music/' + encodeURIComponent(nextName);
+    const a = new Audio(url);
+    a.preload = 'auto';
+    a.volume = 0;
+
+    preloadedAudio = { audio: a, name: nextName, ready: false };
+
+    a.addEventListener('canplaythrough', () => {
+      if (preloadedAudio && preloadedAudio.audio === a) {
+        preloadedAudio.ready = true;
+      }
+    }, { once: true });
+    a.addEventListener('error', () => {
+      // 预加载失败不影响主流程
+      preloadedAudio = null;
+    }, { once: true });
+  }
+
   // 播放一首歌（full volume）并绑定事件
   async function playCurrent(name) {
     if (!name) return stop();
@@ -297,12 +334,18 @@
     isCrossfading = false;
     updateUI(name);
     attachListeners(currentAudio);
+
+    // 当前歌一开始播放，就在后台预加载下一首
+    preloadNext(name);
   }
 
   // 尝试播放下一首（交叉渐变优先 → 失败则顺序播放）
   function playNext() {
     if (songs.length === 0 || !currentAudio) { stop(); return; }
-    const nextName = pickNext(currentAudio._name);
+
+    // 优先使用预加载选好的歌曲名，保证一致性
+    const nextName = preloadedName || pickNext(currentAudio._name);
+    preloadedName = null; // 用掉后清掉
     if (!nextName) { stop(); return; }
 
     nextSongName.textContent = '即将播放: ' + nextName.replace(/\.mp3$/i, '');
@@ -314,7 +357,21 @@
     isCrossfading = true;
     crossfadeInfo.textContent = '🎵 交替中...';
 
-    playSong(nextName, 0).then(a => {
+    // 优先使用已预加载的音频（数据已缓存，播放无延迟）
+    const usePreloaded = preloadedAudio && preloadedAudio.name === nextName && preloadedAudio.ready;
+    let nextAudioElement;
+    if (usePreloaded) {
+      nextAudioElement = preloadedAudio.audio;
+      nextAudioElement.volume = 0;
+      preloadedAudio = null;
+    }
+
+    // 尝试播放下一首（音量 0，用于交叉渐变或降级）
+    const playPromise = usePreloaded
+      ? nextAudioElement.play().then(() => nextAudioElement).catch(() => null)
+      : playSong(nextName, 0);
+
+    playPromise.then(a => {
       if (!a) {
         // [移动端常见] 无法同时播放两个 Audio。
         // 降级：关掉当前歌，直接播下一首（无渐变）
@@ -323,7 +380,25 @@
           currentAudio = null;
         }
         isCrossfading = false;
-        playCurrent(nextName);
+
+        // 如果预加载的音频已经缓存了数据，重试 play()（单音频播放应该成功）
+        if (preloadedAudio && preloadedAudio.name === nextName) {
+          const preloaded = preloadedAudio.audio;
+          preloaded.volume = 1.0;
+          preloadedAudio = null;
+          preloaded.play().then(() => {
+            currentAudio = preloaded;
+            currentAudio._name = nextName;
+            isPlaying = true;
+            updateUI(nextName);
+            attachListeners(currentAudio);
+            preloadNext(nextName);
+          }).catch(() => {
+            playCurrent(nextName);
+          });
+        } else {
+          playCurrent(nextName);
+        }
         return;
       }
       nextAudio = a;
@@ -390,6 +465,11 @@
       try { nextAudio.pause(); } catch {}
       nextAudio = null;
     }
+    if (preloadedAudio) {
+      try { preloadedAudio.audio.pause(); } catch {}
+      preloadedAudio = null;
+    }
+    preloadedName = null;
 
     isPlaying = false;
     isCrossfading = false;
