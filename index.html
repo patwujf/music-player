@@ -222,7 +222,18 @@
     const url = 'music/' + encodeURIComponent(name);
     const a = new Audio(url);
     a.volume = startVolume;
+    a.preload = 'auto';
+
     try {
+      // 等待音频数据加载到可播放（canplay）或超时
+      // 移动端 play() 可能在数据就绪前就 resolve，导致无声音
+      await Promise.race([
+        new Promise((resolve, reject) => {
+          a.addEventListener('canplay', resolve, { once: true });
+          a.addEventListener('error', () => reject(new Error('加载失败')), { once: true });
+        }),
+        new Promise(resolve => setTimeout(resolve, 20000)) // 20s 超时，继续尝试播放
+      ]);
       await a.play();
       return a;
     } catch (e) {
